@@ -1,0 +1,5 @@
+.streamlit/
+.DS_Store
+vscode/
+
+*.ipynb

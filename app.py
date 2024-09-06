@@ -90,15 +90,29 @@ if uploaded_file is not None:
         with tempfile.TemporaryDirectory() as screenshot_dir:
             with st.spinner("Analyzing links and capturing screenshots..."):
                 results = analyze_links_with_screenshots(links, screenshot_dir)
+            
+            if results:
+                error_count = sum(1 for result in results if 'error' in result)
+                st.error(f"Links analyzed: {len(results)} | Links with errors: {error_count} 🚨")
+                
+                st.markdown(f'<p class="big-font">📊 Analysis Summary:</p>', unsafe_allow_html=True)
+                st.markdown(f'<p class="big-font">Total Links: {len(results)} | Successful: {len(results) - error_count} | Errors: {error_count}</p>', unsafe_allow_html=True)
+                # Calculate the error percentage
+                error_percentage = (error_count / len(results)) * 100
+                st.progress(error_percentage / 100)
+                st.write(f"Error Percentage: {error_percentage:.2f}%")
+                st.write("-"*25)
 
             for result in results:
-                st.subheader(result['link'])
+                st.write(result['link'])
                 if 'error' in result:
                     st.error(f"Error: {result['error']}")
+                    st.write("-"*25)
                 else:
                     st.write(f"Status Code: {result['status_code']}")
                     st.write(f"Content Returned: {result['content_returned']}")
                     st.image(result['screenshot_path'], caption="Screenshot", use_column_width=True)
+                    st.write("-"*25)
 
 st.info("Note: This application interacts with external websites. Please use responsibly and in accordance with the terms of service of the websites being analyzed.")
 
@@ -148,3 +162,8 @@ The Document Content Analyzer is a tool designed to extract and analyze content 
    - Remember that this app interacts with external websites.
    - Use responsibly and in accordance with the terms of service of the websites being analyzed.
 """)
+
+# Summary Toast notification for the number of links that returned errors
+if 'results' in locals() and results:
+    error_count = sum(1 for result in results if 'error' in result)
+    st.toast(f"Links analyzed: {len(results)} | Links with errors: {error_count}", icon="🚨")

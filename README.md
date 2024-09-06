@@ -79,7 +79,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - This project uses Streamlit for the web interface.
 - Selenium WebDriver is used for capturing screenshots.
 - python-docx and PyPDF2 are used for document parsing.
-
-## Contact
-
-For any questions or concerns, please open an issue in the GitHub repository.

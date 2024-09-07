@@ -217,12 +217,6 @@ st.sidebar.markdown("""
 
 The Document Content Analyzer is a tool designed to extract and analyze content from Microsoft Word (.docx) and PDF documents. It extracts hyperlinks automatically from both file types, analyzes each link for accessibility and content, and provides a comprehensive report with status codes and visual feedback.
 
-**Key features:**
-- Extract hyperlinks from DOCX and PDF files
-- Analyze each link for accessibility and content
-- Capture screenshots of linked web pages
-- Provide a comprehensive report with status codes and visual feedback
-
 ## How to Use
 
 1. **Upload Your Document**
@@ -250,10 +244,6 @@ The Document Content Analyzer is a tool designed to extract and analyze content 
    - Green status codes (200-299) indicate successful connections.
    - Red status codes (400-599) indicate errors or unavailable pages.
    - Check screenshots to verify the content of each linked page.
-
-6. **Note on External Interactions**
-   - Remember that this app interacts with external websites.
-   - Use responsibly and in accordance with the terms of service of the websites being analyzed.
 """)
 
 # Summary Toast notification for the number of links that returned errors

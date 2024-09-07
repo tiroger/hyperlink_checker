@@ -8,23 +8,90 @@ import re
 import os
 from PIL import Image
 from io import BytesIO
+from lxml import etree
+import fitz  # PyMuPDF
+
+# SCREENSHOT_API_KEY
+api_key = st.secrets["SCREENSHOT_API_KEY"]
 
 def extract_hyperlinks_docx(docx_file):
     doc = docx.Document(docx_file)
     rels = doc.part.rels
     hyperlinks = []
-    for rel in rels:
-        if rels[rel].reltype == RT.HYPERLINK:
-            hyperlinks.append(rels[rel]._target)
+
+    # Parse the document XML
+    xml_content = etree.fromstring(doc.part.blob)
+    
+    # Get all namespaces in the document
+    namespaces = xml_content.nsmap
+
+    # If the default namespace is used, give it a name
+    if None in namespaces:
+        namespaces['w'] = namespaces.pop(None)
+
+    # Find all hyperlink elements
+    for hyperlink in xml_content.xpath('//w:hyperlink', namespaces=namespaces):
+        # Get the relationship id
+        rel_id = hyperlink.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+        if rel_id and rel_id in rels and rels[rel_id].reltype == RT.HYPERLINK:
+            # Get the URL from the relationship
+            url = rels[rel_id]._target
+            # Get the text of the hyperlink
+            text = "".join(t.text for t in hyperlink.xpath('.//w:t', namespaces=namespaces))
+            hyperlinks.append({
+                "text": text,
+                "url": url
+            })
+
+    # Find all runs with rStyle="Hyperlink" (for hyperlinks without w:hyperlink element)
+    for run in xml_content.xpath('//w:r[w:rPr/w:rStyle[@w:val="Hyperlink"]]', namespaces=namespaces):
+        field_codes = run.xpath('preceding-sibling::w:r[w:fldChar[@w:fldCharType="begin"]][1]/following-sibling::w:r[w:instrText]', namespaces=namespaces)
+        for field_code in field_codes:
+            instr_text = field_code.xpath('string(w:instrText)', namespaces=namespaces)
+            match = re.search(r'HYPERLINK\s+"([^"]+)"', instr_text)
+            if match:
+                url = match.group(1)
+                text = "".join(t.text for t in run.xpath('.//w:t', namespaces=namespaces))
+                hyperlinks.append({
+                    "text": text,
+                    "url": url
+                })
+
     return hyperlinks
 
 def extract_hyperlinks_pdf(pdf_file):
-    reader = PyPDF2.PdfReader(pdf_file)
     hyperlinks = []
-    for page in reader.pages:
-        content = page.extract_text()
-        urls = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', content)
-        hyperlinks.extend(urls)
+    url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    
+    doc = fitz.open(pdf_file)
+    for page in doc:
+        # Extract active links
+        links = page.get_links()
+        for link in links:
+            if link['kind'] == 2:  # URI
+                url = link['uri']
+                rect = link['from']
+                text = page.get_textbox(rect)
+                hyperlinks.append({
+                    "text": text.strip() if text.strip() else url,
+                    "url": url
+                })
+        
+        # Extract URL-like text
+        content = page.get_text()
+        urls = re.findall(url_pattern, content)
+        for url in urls:
+            # Find the context around the URL (e.g., 10 characters before and after)
+            start = max(0, content.find(url) - 10)
+            end = min(len(content), content.find(url) + len(url) + 10)
+            context = content[start:end].replace('\n', ' ').strip()
+            
+            hyperlinks.append({
+                "text": context,
+                "url": url
+            })
+    
+    doc.close()
     return hyperlinks
 
 def capture_screenshot(url, api_key):
@@ -35,7 +102,11 @@ def capture_screenshot(url, api_key):
         "full_page": "true",
         "output": "image",
         "file_type": "png",
-        "wait_for_event": "load"
+        "wait_for_event": "load",
+        "fresh": "true",
+        "block_ads": "true",
+        "delay": "500",
+        "no_cookie_banners": "true"
     }
     
     response = requests.get(endpoint, params=params)
@@ -48,21 +119,23 @@ def analyze_links_with_screenshots(links, api_key):
     results = []
     for link in links:
         try:
-            response = requests.get(link, timeout=10)
+            response = requests.get(link['url'], timeout=10)
             status_code = response.status_code
             content_returned = len(response.content) > 0
 
-            screenshot_data = capture_screenshot(link, api_key)
+            screenshot_data = capture_screenshot(link['url'], api_key)
 
             results.append({
-                "link": link,
+                "text": link['text'],
+                "url": link['url'],
                 "status_code": status_code,
                 "content_returned": content_returned,
                 "screenshot": screenshot_data
             })
         except Exception as e:
             results.append({
-                "link": link,
+                "text": link['text'],
+                "url": link['url'],
                 "error": str(e)
             })
 
@@ -80,8 +153,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Use st.secrets to securely store your API key
-api_key = st.secrets["SCREENSHOT_API_KEY"]
 
 uploaded_file = st.file_uploader("Choose a DOCX or PDF file", type=["docx", "pdf"])
 
@@ -111,17 +182,16 @@ if uploaded_file is not None:
         if results:
             error_count = sum(1 for result in results if 'error' in result)
             
-            # Add a custom formatted message
             st.markdown(f'<p class="big-font">📊 Analysis Summary:</p>', unsafe_allow_html=True)
             st.markdown(f'<p class="big-font">Total Links: {len(results)} | Successful: {len(results) - error_count} | Errors: {error_count}</p>', unsafe_allow_html=True)
             
-            # Calculate the error percentage
             error_percentage = (error_count / len(results)) * 100
             st.progress(error_percentage / 100)
             st.write(f"Error Percentage: {error_percentage:.2f}%")
 
         for result in results:
-            st.write(result['link'])
+            st.write(f"Text: {result['text']}")
+            st.write(f"URL: {result['url']}")
             if 'error' in result:
                 st.error(f"Error: {result['error']}")
                 st.write("-"*25)
@@ -147,8 +217,6 @@ st.sidebar.markdown("""
 
 The Document Content Analyzer is a tool designed to extract and analyze content from Microsoft Word (.docx) and PDF documents. It extracts hyperlinks automatically from both file types, analyzes each link for accessibility and content, and provides a comprehensive report with status codes and visual feedback.
 
-**Note** Functionality for PDF files is limited and only works for explicit links (i.e. links that are actual hyperlinks and not text).
-
 **Key features:**
 - Extract hyperlinks from DOCX and PDF files
 - Analyze each link for accessibility and content
@@ -172,6 +240,7 @@ The Document Content Analyzer is a tool designed to extract and analyze content 
 
 4. **Review Results**
    - For each link, you'll see:
+     - The text associated with the link
      - The full URL
      - HTTP status code (e.g., 200 for success, 404 for not found)
      - Whether content was successfully returned

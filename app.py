@@ -2,15 +2,12 @@ import streamlit as st
 import docx
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-import os
-import time
 import tempfile
 import PyPDF2
 import re
+import os
+from PIL import Image
+from io import BytesIO
 
 def extract_hyperlinks_docx(docx_file):
     doc = docx.Document(docx_file)
@@ -30,29 +27,38 @@ def extract_hyperlinks_pdf(pdf_file):
         hyperlinks.extend(urls)
     return hyperlinks
 
-def analyze_links_with_screenshots(links, screenshot_dir):
-    results = []
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--window-size=1920,1080")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+def capture_screenshot(url, api_key):
+    endpoint = "https://shot.screenshotapi.net/screenshot"
+    params = {
+        "token": api_key,
+        "url": url,
+        "full_page": "true",
+        "output": "image",
+        "file_type": "png",
+        "wait_for_event": "load"
+    }
+    
+    response = requests.get(endpoint, params=params)
+    if response.status_code == 200:
+        return response.content
+    else:
+        return None
 
-    for i, link in enumerate(links):
+def analyze_links_with_screenshots(links, api_key):
+    results = []
+    for link in links:
         try:
             response = requests.get(link, timeout=10)
             status_code = response.status_code
             content_returned = len(response.content) > 0
 
-            driver.get(link)
-            time.sleep(5)
-            screenshot_path = os.path.join(screenshot_dir, f"screenshot_{i}.png")
-            driver.save_screenshot(screenshot_path)
+            screenshot_data = capture_screenshot(link, api_key)
 
             results.append({
                 "link": link,
                 "status_code": status_code,
                 "content_returned": content_returned,
-                "screenshot_path": screenshot_path
+                "screenshot": screenshot_data
             })
         except Exception as e:
             results.append({
@@ -60,10 +66,22 @@ def analyze_links_with_screenshots(links, screenshot_dir):
                 "error": str(e)
             })
 
-    driver.quit()
     return results
 
 st.title("Document Hyperlink Analyzer")
+
+# Add custom CSS for the error message
+st.markdown("""
+<style>
+.big-font {
+    font-size:20px !important;
+    font-weight: bold;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Use st.secrets to securely store your API key
+api_key = st.secrets["SCREENSHOT_API_KEY"]
 
 uploaded_file = st.file_uploader("Choose a DOCX or PDF file", type=["docx", "pdf"])
 
@@ -87,38 +105,44 @@ if uploaded_file is not None:
     st.write(f"Found {len(links)} hyperlinks in the document.")
 
     if st.button("Analyze Links"):
-        with tempfile.TemporaryDirectory() as screenshot_dir:
-            with st.spinner("Analyzing links and capturing screenshots..."):
-                results = analyze_links_with_screenshots(links, screenshot_dir)
+        with st.spinner("Analyzing links and capturing screenshots..."):
+            results = analyze_links_with_screenshots(links, api_key)
+
+        if results:
+            error_count = sum(1 for result in results if 'error' in result)
             
-            if results:
-                error_count = sum(1 for result in results if 'error' in result)
-                st.error(f"Links analyzed: {len(results)} | Links with errors: {error_count} 🚨")
-                
-                st.markdown(f'<p class="big-font">📊 Analysis Summary:</p>', unsafe_allow_html=True)
-                st.markdown(f'<p class="big-font">Total Links: {len(results)} | Successful: {len(results) - error_count} | Errors: {error_count}</p>', unsafe_allow_html=True)
-                # Calculate the error percentage
-                error_percentage = (error_count / len(results)) * 100
-                st.progress(error_percentage / 100)
-                st.write(f"Error Percentage: {error_percentage:.2f}%")
+            # Add a custom formatted message
+            st.markdown(f'<p class="big-font">📊 Analysis Summary:</p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="big-font">Total Links: {len(results)} | Successful: {len(results) - error_count} | Errors: {error_count}</p>', unsafe_allow_html=True)
+            
+            # Calculate the error percentage
+            error_percentage = (error_count / len(results)) * 100
+            st.progress(error_percentage / 100)
+            st.write(f"Error Percentage: {error_percentage:.2f}%")
+
+        for result in results:
+            st.write(result['link'])
+            if 'error' in result:
+                st.error(f"Error: {result['error']}")
                 st.write("-"*25)
-
-            for result in results:
-                st.write(result['link'])
-                if 'error' in result:
-                    st.error(f"Error: {result['error']}")
-                    st.write("-"*25)
+            else:
+                st.write(f"Status Code: {result['status_code']}")
+                st.write(f"Content Returned: {result['content_returned']}")
+                if result['screenshot']:
+                    try:
+                        image = Image.open(BytesIO(result['screenshot']))
+                        st.image(image, caption="Screenshot", use_column_width=True)
+                        st.write("-"*25)
+                    except Exception as e:
+                        st.error(f"Failed to display screenshot: {str(e)}")
+                        st.write("-"*25)
                 else:
-                    st.write(f"Status Code: {result['status_code']}")
-                    st.write(f"Content Returned: {result['content_returned']}")
-                    st.image(result['screenshot_path'], caption="Screenshot", use_column_width=True)
+                    st.write("Screenshot capture failed")
                     st.write("-"*25)
-
+                    
 st.info("Note: This application interacts with external websites. Please use responsibly and in accordance with the terms of service of the websites being analyzed.")
 
 st.sidebar.markdown("""
-# Document Content Analyzer
-
 ## Description
 
 The Document Content Analyzer is a tool designed to extract and analyze content from Microsoft Word (.docx) and PDF documents. It extracts hyperlinks automatically from both file types, analyzes each link for accessibility and content, and provides a comprehensive report with status codes and visual feedback.
